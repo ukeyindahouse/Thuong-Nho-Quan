@@ -251,12 +251,13 @@ svg.chart .rev{fill:var(--rev)} svg.chart .exp{fill:var(--exp)}
   </nav>
 </div>
 
+<script src="firebase-config.js"></script>
 <script>
 (function(){
 "use strict";
 
 /* ===== Bảng giá (sửa tại đây nếu đổi giá) ===== */
-var MENU=[
+var MENU_DEFAULT=[
   {id:"soda",  name:"Nước ngọt",         price:18000},
   {id:"bohuc", name:"Bò húc (Red Bull)", price:25000},
   {id:"cfden", name:"Cà phê đen",        price:18000},
@@ -267,7 +268,35 @@ var BIDA={hour:30000, up1:15, add1:5000, up2:35, add2:15000};
 var CATS=["Nhập hàng","Điện nước","Mặt bằng","Lương","Khác"];
 var DAYS=["Chủ nhật","Thứ hai","Thứ ba","Thứ tư","Thứ năm","Thứ sáu","Thứ bảy"];
 var DEFAULT_SHOP="Thương Nhớ Quán";
-var KEY={entries:"tnq_entries_v1",cache:"tnq_cache_v1",draft:"tnq_draft_v1",shop:"tnq_shop_v1",backup:"tnq_backup_v1",hide:"tnq_hide_install_v1"};
+var KEY={entries:"tnq_entries_v1",cache:"tnq_cache_v1",draft:"tnq_draft_v1",shop:"tnq_shop_v1",backup:"tnq_backup_v1",hide:"tnq_hide_install_v1",menu:"tnq_menu_v1",user:"tnq_user_v1",asked:"tnq_asked_name_v1"};
+
+/* ===== Thực đơn (sửa được trong app) và tên người dùng ===== */
+function validMenu(list){
+  if(!Array.isArray(list)||list.length>60) return null;
+  var out=[];
+  for(var i=0;i<list.length;i++){
+    var m=list[i];
+    if(!m||typeof m.id!=="string"||!/^[A-Za-z0-9_-]{1,60}$/.test(m.id)||typeof m.name!=="string"||typeof m.price!=="number"||!isFinite(m.price)||m.price<0) return null;
+    out.push({id:m.id,name:m.name.slice(0,40),price:Math.round(m.price)});
+  }
+  return out;
+}
+function cleanMenu(list){
+  return list.filter(function(m){return m&&String(m.name).trim()&&isFinite(m.price);}).map(function(m){return {id:m.id,name:String(m.name).trim().slice(0,40),price:Math.max(0,Math.round(m.price))};});
+}
+var MENU=validMenu(lsGet(KEY.menu,null))||clone(MENU_DEFAULT);
+var userName=String(lsGet(KEY.user,"")||"");
+function whoText(e){
+  var a=e.startBy, z=e.closeBy;
+  if(e.startTs){
+    if(a&&z) return a+" bấm bắt đầu"+(a===z?" và kết thúc":", "+z+" bấm kết thúc");
+    if(a) return a+" bấm bắt đầu";
+    if(z) return z+" bấm kết thúc";
+    return "";
+  }
+  return e.by?e.by+" lập bill":"";
+}
+function whoLine(e){var t=whoText(e);return t?'<p class="hint" style="margin:-4px 2px 10px">'+esc(t)+'</p>':'';}
 
 /* ===== Tiện ích ===== */
 function $(s){return document.querySelector(s);}
@@ -338,6 +367,7 @@ var shopName=lsGet(KEY.shop,DEFAULT_SHOP);
 var draft=lsGet(KEY.draft,null)||{qty:{},other:"",otherNote:"",bida:false,start:"",end:""};
 var state={tab:"sell",period:"7",histDays:7,open:null,confirm:null,cat:CATS[0],pending:null,sheet:null,menuOpen:{}};
 var loadTimer=null, deferredPrompt=null;
+var fb=false, fbAuth=null, fbCfg=null, shopTimer=null, unsubs=[];
 
 function newId(p){return p+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function saveDraft(){lsSet(KEY.draft,draft);}
@@ -347,21 +377,27 @@ function putMemory(e){
   var found=false; entries=entries.map(function(x){if(x.id===e.id){found=true;return e;}return x;});
   if(!found) entries=entries.concat([e]);
 }
+/* Với Firebase, lệnh ghi hoàn tất ngay trên máy và tự đẩy lên khi có mạng,
+   nên không chờ máy chủ trả lời (mất mạng vẫn bấm lưu được). */
+function dbWrite(p){
+  p.catch(function(){toast("Chưa lưu được, thử lại nhé");});
+  return fb?Promise.resolve():p;
+}
 function putEntry(e,debounce){
   putMemory(e);
   if(!db){persistLocal();return Promise.resolve();}
   if(debounce){
     clearTimeout(wt[e.id]);
-    wt[e.id]=setTimeout(function(){db.collection("entries").doc(e.id).set(e).catch(function(){toast("Chưa lưu được, thử lại nhé");});},500);
+    wt[e.id]=setTimeout(function(){dbWrite(db.collection("entries").doc(e.id).set(e));},500);
     return Promise.resolve();
   }
   clearTimeout(wt[e.id]);
-  return db.collection("entries").doc(e.id).set(e);
+  return dbWrite(db.collection("entries").doc(e.id).set(e));
 }
 function delEntry(id){
   clearTimeout(wt[id]);
   entries=entries.filter(function(e){return e.id!==id;});
-  if(db){return db.collection("entries").doc(id).delete();}
+  if(db){return dbWrite(db.collection("entries").doc(id).delete());}
   persistLocal(); return Promise.resolve();
 }
 
@@ -373,8 +409,9 @@ function needBackup(){
 }
 function setSync(kind){
   var el=$("#sync"), txt="", warn=false;
-  if(kind==="cloud") txt="Đã lưu trên máy chủ";
+  if(kind==="cloud") txt="Đồng bộ giữa các máy";
   else if(kind==="loading"){txt="Đang tải dữ liệu…";warn=true;}
+  else if(kind==="offline"){txt="Đang mất mạng, có mạng sẽ tự đồng bộ";warn=true;}
   else if(kind==="slow"){txt="Chưa kết nối, số liệu có thể cũ";warn=true;}
   else {txt="Dữ liệu lưu trên điện thoại này";}
   var nb=needBackup();
@@ -383,21 +420,84 @@ function setSync(kind){
   $("#gearBadge").hidden=!nb;
 }
 
-async function initData(){
-  var inst=null;
-  try{ inst=(window.claude&&window.claude.use)?await window.claude.use("db"):null; }catch(e){inst=null;}
-  if(!inst){
-    mode="local"; entries=lsGet(KEY.entries,[]); setSync("local"); renderData(); tick(); return;
-  }
-  db=inst; mode="cloud";
+function stopListen(){unsubs.forEach(function(f){try{f();}catch(e){}});unsubs=[];}
+function listen(){
+  stopListen();
   entries=lsGet(KEY.cache,[]); setSync("loading"); renderData();
-  loadTimer=setTimeout(function(){setSync("slow");},10000);
-  db.collection("entries").onSnapshot(function(snap){
+  loadTimer=setTimeout(function(){setSync(navigator.onLine===false?"offline":"slow");},10000);
+  unsubs.push(db.collection("entries").onSnapshot(function(snap){
     entries=snap.docs.map(function(d){return d.data();});
     lsSet(KEY.cache,entries);
     if(!snap.metadata.fromCache){clearTimeout(loadTimer);setSync("cloud");}
+    else if(navigator.onLine===false){clearTimeout(loadTimer);setSync("offline");}
     renderData(); tick();
-  },function(){clearTimeout(loadTimer);setSync("slow");});
+  },function(){clearTimeout(loadTimer);setSync("slow");}));
+  if(db){
+    unsubs.push(db.collection("settings").doc("menu").onSnapshot(function(s){
+      var d=s.exists?s.data():null, m=d?validMenu(JSON.parse(JSON.stringify(d.items||null))):null;
+      if(!m||JSON.stringify(m)===JSON.stringify(MENU)) return;
+      MENU=m; lsSet(KEY.menu,MENU);
+      if(state.sheet==="menu") return;
+      var ae=document.activeElement, typing=ae&&(ae.tagName==="INPUT"||ae.tagName==="TEXTAREA");
+      if(typing) return;
+      if(state.tab==="sell") renderSell(); else if(state.tab==="timer") renderTimer();
+    },function(){}));
+    unsubs.push(db.collection("settings").doc("main").onSnapshot(function(s){
+      var d=s.exists&&s.data();
+      if(d&&typeof d.shop==="string"&&d.shop.trim()&&d.shop!==shopName){shopName=d.shop;lsSet(KEY.shop,shopName);applyShop();}
+    },function(){}));
+  }
+}
+function loadScript(src){
+  return new Promise(function(res,rej){
+    var s=document.createElement("script"); s.src=src; s.onload=res; s.onerror=function(){rej(new Error("load "+src));};
+    document.head.appendChild(s);
+  });
+}
+function showLogin(msg){
+  state.tab="login";
+  $(".dock").hidden=true;
+  $("#view").innerHTML='<section class="card"><h2>Đăng nhập</h2>'
+    +'<p class="pr" style="margin:0 0 4px">Nhập mật khẩu chung của quán để dùng chung số liệu giữa các máy. Chỉ cần nhập một lần trên mỗi điện thoại.</p>'
+    +'<label class="lb" for="pw">Mật khẩu của quán</label><input class="field" type="password" id="pw" autocomplete="current-password" autocapitalize="off">'
+    +(msg?'<p class="hint" style="color:var(--bad)">'+esc(msg)+'</p>':'')
+    +'<div style="height:12px"></div><button class="btn primary full" data-act="login">Đăng nhập</button></section>';
+}
+function afterLogin(){
+  $(".dock").hidden=false;
+  db=firebase.firestore();
+  listen();
+  go("sell");
+  maybeAskName();
+}
+async function initFirebase(cfg){
+  fbCfg=cfg; mode="cloud"; fb=true;
+  entries=lsGet(KEY.cache,[]); setSync("loading");
+  var base="https://www.gstatic.com/firebasejs/10.12.2/";
+  try{
+    await loadScript(base+"firebase-app-compat.js");
+    await Promise.all([loadScript(base+"firebase-auth-compat.js"),loadScript(base+"firebase-firestore-compat.js")]);
+    firebase.initializeApp(cfg.firebaseConfig);
+    try{await firebase.firestore().enablePersistence({synchronizeTabs:true});}catch(e){}
+    fbAuth=firebase.auth();
+  }catch(e){
+    fb=false; mode="local"; entries=lsGet(KEY.entries,[]); setSync("slow");
+    toast("Chưa kết nối được máy chủ. Đang dùng số liệu trên máy này.");
+    renderData(); return;
+  }
+  var started=false;
+  fbAuth.onAuthStateChanged(function(u){
+    if(u){ if(!started){started=true;afterLogin();} }
+    else { started=false; stopListen(); showLogin(); }
+  });
+}
+async function initData(){
+  var inst=null;
+  try{ inst=(window.claude&&window.claude.use)?await window.claude.use("db"):null; }catch(e){inst=null;}
+  if(inst){ db=inst; mode="cloud"; listen(); maybeAskName(); return; }
+  var cfg=window.TNQ_FIREBASE;
+  if(cfg&&cfg.firebaseConfig&&cfg.firebaseConfig.apiKey&&cfg.email){ await initFirebase(cfg); return; }
+  mode="local"; entries=lsGet(KEY.entries,[]); setSync("local"); renderData(); tick(); maybeAskName();
 }
 
 var toastT=null;
@@ -480,7 +580,7 @@ function doInstall(){
 }
 
 /* ===== Sao lưu / khôi phục ===== */
-function backupObj(){return {app:"ThuongNhoQuan",version:1,exportedAt:Date.now(),shop:shopName,entries:entries};}
+function backupObj(){return {app:"ThuongNhoQuan",version:1,exportedAt:Date.now(),shop:shopName,menu:MENU,entries:entries};}
 function backupName(){return "ThuongNhoQuan-saoluu-"+dayKey(new Date())+".json";}
 function markBackup(){lsSet(KEY.backup,Date.now());setSync(mode==="cloud"?"cloud":"local");}
 function downloadBackup(){
@@ -507,6 +607,8 @@ function restoreFrom(text){
   var ok=list.filter(function(e){return e&&typeof e.id==="string"&&/^[A-Za-z0-9_-]{1,100}$/.test(e.id)&&(e.kind==="bill"||e.kind==="expense");});
   if(!ok.length){toast("Trong file không có dữ liệu");return;}
   if(obj&&typeof obj.shop==="string"&&obj.shop.trim()){shopName=obj.shop.trim();lsSet(KEY.shop,shopName);applyShop();}
+  var rm=obj&&!Array.isArray(obj)?validMenu(obj.menu):null;
+  if(rm&&rm.length){MENU=rm;saveMenu(true);}
   var done=function(){toast("Đã khôi phục "+ok.length+" mục");closeSheet();renderData();tick();};
   if(!db){
     var map={}; entries.forEach(function(e){map[e.id]=e;}); ok.forEach(function(e){map[e.id]=e;});
@@ -525,12 +627,20 @@ function showSettings(){
     h+='<section class="card"><h2>Ứng dụng</h2><button class="btn primary full" data-act="install">Cài về điện thoại</button></section>';
   }
   h+='<section class="card"><h2>Tên quán (in trên bill)</h2><input class="field" id="shopName" autocomplete="off" value="'+esc(shopName)+'" aria-label="Tên quán"></section>';
+  h+='<section class="card"><h2>Tên của bạn</h2><input class="field" id="userName" autocomplete="off" placeholder="VD: Lan" value="'+esc(userName)+'" aria-label="Tên của bạn"><p class="hint">Ghi lại ở bill và khoản chi bạn bấm. Mỗi điện thoại một tên.</p></section>';
+  h+='<section class="card"><h2>Thực đơn</h2><button class="btn full" data-act="editMenu">Sửa món và giá</button></section>';
   h+='<section class="card"><h2>Sao lưu dữ liệu</h2><p class="hint" style="margin:0 0 10px">'
-    +(mode==="local"?'Số liệu đang nằm trong điện thoại này. Hãy sao lưu mỗi tuần và trước khi đổi máy hoặc xoá dữ liệu trình duyệt.':'Số liệu đang được lưu trên máy chủ. Vẫn nên tải một bản sao lưu.')
+    +(mode==="local"?'Số liệu đang nằm trong điện thoại này. Hãy sao lưu mỗi tuần và trước khi đổi máy hoặc xoá dữ liệu trình duyệt.':'Số liệu đang đồng bộ giữa các máy của quán. Thỉnh thoảng vẫn nên tải một bản sao lưu.')
     +'</p><div class="stack"><button class="btn full" data-act="backup">Tải file sao lưu</button>'
     +(canShareFile()?'<button class="btn full" data-act="shareBackup">Gửi file sao lưu (Zalo, Drive…)</button>':'')
     +'<label class="btn full filebtn">Khôi phục từ file<input type="file" id="restoreFile" accept=".json,application/json"></label></div>'
     +'<p class="hint">'+(last?'Sao lưu gần nhất: '+fmtDT(last):'Chưa sao lưu lần nào.')+'</p></section>';
+  if(fb){
+    var localCount=lsGet(KEY.entries,[]).length;
+    h+='<section class="card"><h2>Dùng chung nhiều máy</h2><div class="stack">';
+    if(localCount>0) h+='<button class="btn full" data-act="uploadLocal">Đưa '+localCount+' mục cũ trên máy này lên dùng chung</button>';
+    h+='<button class="btn full danger" data-act="logout">Đăng xuất khỏi máy này</button></div></section>';
+  }
   h+='<button class="btn full" data-act="closeSheet">Đóng</button>';
   openSheet("settings",h);
 }
@@ -554,13 +664,13 @@ function openCalc(e,now){
 }
 function closeOpen(e,now){
   var c=openCalc(e,now), d=new Date(now), s=new Date(e.startTs), x=clone(e);
-  x.status="done"; x.closedTs=now; x.ts=now; x.day=dayKey(d); x.drinks=c.drinks; x.total=c.total;
+  x.status="done"; x.closeBy=userName; x.closedTs=now; x.ts=now; x.day=dayKey(d); x.drinks=c.drinks; x.total=c.total;
   x.bida={start:hm(s),end:hm(d),startTs:e.startTs,endTs:now,minutes:c.minutes,amount:c.bida,detail:c.detail};
   return x;
 }
 function startTimer(label){
   var now=Date.now();
-  var e={id:newId("b"),kind:"bill",status:"open",label:label,ts:now,openedTs:now,startTs:now,day:dayKey(new Date(now)),items:[],drinks:0,other:0,otherNote:"",bida:null,total:0};
+  var e={id:newId("b"),kind:"bill",status:"open",label:label,startBy:userName,ts:now,openedTs:now,startTs:now,day:dayKey(new Date(now)),items:[],drinks:0,other:0,otherNote:"",bida:null,total:0};
   return putEntry(e);
 }
 function editOpen(id,fn){
@@ -629,7 +739,7 @@ function renderTimer(){
   opens.forEach(function(e){
     var id=e.id, mo=state.menuOpen[id];
     h+='<section class="card" id="oc-'+id+'"><div class="ohead"><div class="grow"><div class="nm">'+esc(openName(e))+'</div>'
-      +'<div class="pr">Vào lúc '+fmtDT(e.startTs)+'</div></div><span class="pill">Đang chơi</span></div>'
+      +'<div class="pr">Vào lúc '+fmtDT(e.startTs)+(e.startBy?' · '+esc(e.startBy)+' bấm':'')+'</div></div><span class="pill">Đang chơi</span></div>'
       +'<div class="clock" data-clock="'+id+'" aria-label="Thời gian đã chơi">00:00:00</div>'
       +'<div class="bidainfo"><span data-tmin="'+id+'"></span><br>Tiền bida tạm tính: <b data-tbida="'+id+'"></b><div class="hint" data-tdetail="'+id+'"></div></div>'
       +'<label class="lb" for="st-'+id+'">Giờ vào (sửa nếu bấm trễ)</label><input class="field num" type="time" id="st-'+id+'" data-start="'+id+'" value="'+hm(new Date(e.startTs))+'">'
@@ -660,7 +770,7 @@ function renderBills(){
   if(!opens.length) h+='<div class="pr">Không có bàn nào đang chơi.</div>';
   opens.forEach(function(e){
     h+='<button class="hrow" data-act="gotoOpen" data-id="'+e.id+'"><span class="t">Vào<br>'+fmtDM(e.startTs)+'</span>'
-      +'<span class="s">'+esc(openName(e))+'<br><span class="num" data-rowclock="'+e.id+'">00:00:00</span></span>'
+      +'<span class="s">'+esc(openName(e))+(e.startBy?' · '+esc(e.startBy):'')+'<br><span class="num" data-rowclock="'+e.id+'">00:00:00</span></span>'
       +'<span class="m" data-rowtotal="'+e.id+'"></span></button>';
   });
   h+='</section>';
@@ -685,7 +795,7 @@ function renderBills(){
       if(b.bida) parts.push("Bida "+fmtDur(b.bida.minutes));
       h+='<button class="hrow" data-act="toggle" data-id="'+b.id+'" aria-expanded="'+(state.open===b.id)+'"><span class="t">'+fmtDM(b.closedTs||b.ts)+'</span><span class="s">'+esc(parts.join(" · "))+'</span><span class="m">'+money(b.total)+'</span></button>';
       if(state.open===b.id){
-        h+=receiptHTML(receiptModel(b))+'<div id="copybox"></div>'
+        h+=receiptHTML(receiptModel(b))+whoLine(b)+'<div id="copybox"></div>'
           +'<div class="split" style="margin-bottom:10px"><button class="btn" data-act="copyEntry" data-id="'+b.id+'">Sao chép bill</button>'
           +'<button class="btn danger" data-act="del" data-id="'+b.id+'">'+(state.confirm===b.id?'Bấm lại để xoá':'Xoá bill')+'</button></div>';
       }
@@ -710,7 +820,7 @@ function renderExp(){
   h+='<section class="card"><h2>Chi gần đây</h2>';
   if(!list.length) h+='<div class="pr">Chưa ghi khoản chi nào.</div>';
   list.forEach(function(e){
-    h+='<div class="row"><div class="grow"><div class="nm">'+esc(e.cat)+(e.note?' · '+esc(e.note):'')+'</div><div class="pr num">'+fmtDate(keyToDate(e.day))+'</div></div>'
+    h+='<div class="row"><div class="grow"><div class="nm">'+esc(e.cat)+(e.note?' · '+esc(e.note):'')+'</div><div class="pr num">'+fmtDate(keyToDate(e.day))+(e.by?' · '+esc(e.by):'')+'</div></div>'
       +'<div class="num" style="font-weight:700;color:var(--exp)">'+money(e.amount)+'</div>'
       +'<button class="btn small'+(state.confirm===e.id?' danger':'')+'" data-act="del" data-id="'+e.id+'" aria-label="Xoá khoản chi">'+(state.confirm===e.id?'Xoá?':'Xoá')+'</button></div>';
   });
@@ -860,8 +970,43 @@ function go(tab){
 }
 
 /* ===== Bảng hiện lên (hóa đơn, cài đặt, hướng dẫn) ===== */
-function openSheet(kind,html){state.sheet=kind;$("#panel").innerHTML=html;$("#panel").setAttribute("aria-label",kind==="receipt"?"Hóa đơn":kind==="settings"?"Cài đặt":"Hướng dẫn");$("#sheet").hidden=false;}
-function closeSheet(){$("#sheet").hidden=true;state.sheet=null;state.pending=null;}
+function openSheet(kind,html){state.sheet=kind;$("#panel").innerHTML=html;$("#panel").setAttribute("aria-label",{receipt:"Hóa đơn",settings:"Cài đặt",menu:"Thực đơn và giá",name:"Tên của bạn"}[kind]||"Hướng dẫn");$("#sheet").hidden=false;}
+function closeSheet(){
+  var k=state.sheet;
+  $("#sheet").hidden=true;state.sheet=null;state.pending=null;
+  if(k==="menu") menuClosed();
+}
+var menuTimer=null;
+function saveMenu(now){
+  lsSet(KEY.menu,MENU);
+  if(!db) return;
+  clearTimeout(menuTimer);
+  var send=function(){dbWrite(db.collection("settings").doc("menu").set({items:cleanMenu(MENU)}));};
+  if(now) send(); else menuTimer=setTimeout(send,700);
+}
+function menuClosed(){
+  MENU=cleanMenu(MENU); saveMenu(true);
+  if(state.tab==="sell") renderSell(); else if(state.tab==="timer") renderTimer();
+}
+function showMenu(){
+  var h='<h3>Thực đơn và giá</h3><p class="hint" style="margin:0 0 10px">Đổi ở một máy thì các máy khác cũng đổi theo. Bill cũ giữ nguyên giá lúc bán.</p>';
+  MENU.forEach(function(m,i){
+    var armed=state.confirm==="m"+i;
+    h+='<div class="card"><label class="lb" style="margin-top:0" for="mn-'+i+'">Tên món</label><input class="field" id="mn-'+i+'" data-mname="'+i+'" autocomplete="off" value="'+esc(m.name)+'">'
+      +'<label class="lb" for="mp-'+i+'">Giá (đồng)</label><div class="timebox"><input class="field num" id="mp-'+i+'" data-mprice="'+i+'" inputmode="numeric" autocomplete="off" value="'+m.price+'">'
+      +'<button class="btn small'+(armed?' danger':'')+'" data-act="delMenu" data-i="'+i+'">'+(armed?'Bấm lại để xoá':'Xoá món')+'</button></div></div>';
+  });
+  if(!MENU.length) h+='<div class="pr" style="margin-bottom:10px">Chưa có món nào. Bấm “Thêm món”.</div>';
+  h+='<button class="btn full" data-act="addMenu">+ Thêm món</button><div style="height:10px"></div><button class="btn primary full" data-act="closeSheet">Xong</button>';
+  openSheet("menu",h);
+}
+function showNameAsk(){
+  lsSet(KEY.asked,true);
+  openSheet("name",'<h3>Bạn tên gì?</h3><p class="pr" style="margin:0 0 8px">Tên này được ghi lại ở mỗi bill và khoản chi bạn bấm, để cả quán biết ai đã làm. Mỗi điện thoại nhập một lần, đổi lại ở Cài đặt.</p>'
+    +'<label class="lb" for="askName">Tên của bạn</label><input class="field" id="askName" autocomplete="off" placeholder="VD: Lan">'
+    +'<div style="height:12px"></div><div class="split"><button class="btn" data-act="closeSheet">Để sau</button><button class="btn primary" data-act="saveName">Lưu tên</button></div>');
+}
+function maybeAskName(){if(!userName&&!lsGet(KEY.asked,false)) showNameAsk();}
 function openReceipt(entry,backLabel){
   state.pending=entry;
   var m=receiptModel(entry);
@@ -895,13 +1040,17 @@ document.addEventListener("click",function(ev){
     var c=calcDraft();
     if(c.total<=0){toast("Bill chưa có món nào");return;}
     var now=Date.now();
-    openReceipt({id:newId("b"),kind:"bill",status:"done",ts:now,closedTs:now,day:dayKey(new Date(now)),items:c.items,drinks:c.drinks,other:c.other,otherNote:c.otherNote,bida:c.bida?{start:c.bida.start,end:c.bida.end,minutes:c.bida.minutes,amount:c.bida.amount,detail:c.bida.detail}:null,total:c.total},"Quay lại sửa");
+    openReceipt({id:newId("b"),kind:"bill",status:"done",by:userName,ts:now,closedTs:now,day:dayKey(new Date(now)),items:c.items,drinks:c.drinks,other:c.other,otherNote:c.otherNote,bida:c.bida?{start:c.bida.start,end:c.bida.end,minutes:c.bida.minutes,amount:c.bida.amount,detail:c.bida.detail}:null,total:c.total},"Quay lại sửa");
   }
   else if(act==="closeSheet"){closeSheet();}
   else if(act==="sheetCopy"){var t=receiptText(receiptModel(state.pending));copyText(t,function(){showCopyFallback(t);});}
   else if(act==="sheetSave"){
     var e=state.pending; if(!e) return;
     var wasOpen=!!e.startTs;
+    if(wasOpen){
+      var cur=getEntry(e.id);
+      if(!cur||!isOpen(cur)){toast("Bàn này đã được tính tiền hoặc huỷ ở máy khác");closeSheet();renderData();return;}
+    }
     b.disabled=true;
     putEntry(e).then(function(){
       if(!wasOpen){draft={qty:{},other:"",otherNote:"",bida:false,start:"",end:""};saveDraft();}
@@ -918,7 +1067,7 @@ document.addEventListener("click",function(ev){
     var k=b.dataset.k;
     editOpen(id,function(x){
       var it=x.items.filter(function(i){return i.k===k;})[0];
-      if(!it){var m=MENU.filter(function(z){return z.id===k;})[0];it={k:m.id,n:m.name,q:0,p:m.price};x.items.push(it);}
+      if(!it){var m=MENU.filter(function(z){return z.id===k;})[0];if(!m)return;it={k:m.id,n:m.name,q:0,p:m.price};x.items.push(it);}
       it.q=Math.max(0,Math.min(99,it.q+(act==="oinc"?1:-1)));
       x.items=x.items.filter(function(i){return i.q>0;});
     });
@@ -955,7 +1104,7 @@ document.addEventListener("click",function(ev){
   else if(act==="saveExp"){
     var amt=parseMoney($("#expAmt").value), day=$("#expDate").value||dayKey(new Date());
     if(amt<=0){toast("Nhập số tiền chi");return;}
-    var ex={id:newId("e"),kind:"expense",ts:Date.now(),day:day,amount:amt,cat:state.cat,note:$("#expNote").value.trim()};
+    var ex={id:newId("e"),kind:"expense",by:userName,ts:Date.now(),day:day,amount:amt,cat:state.cat,note:$("#expNote").value.trim()};
     b.disabled=true;
     putEntry(ex).then(function(){toast("Đã lưu khoản chi "+money(amt));renderExp();},function(){b.disabled=false;toast("Không lưu được, thử lại nhé");});
   }
@@ -965,6 +1114,46 @@ document.addEventListener("click",function(ev){
   else if(act==="hideInstall"){lsSet(KEY.hide,true);renderSell();}
   else if(act==="backup"){downloadBackup();}
   else if(act==="shareBackup"){shareBackup();}
+  else if(act==="editMenu"){showMenu();}
+  else if(act==="addMenu"){
+    MENU.push({id:newId("m"),name:"",price:0}); saveMenu(false); showMenu();
+    var ni=document.getElementById("mn-"+(MENU.length-1)); if(ni) ni.focus();
+  }
+  else if(act==="delMenu"){
+    var di=+b.dataset.i;
+    if(state.confirm==="m"+di){state.confirm=null;MENU.splice(di,1);saveMenu(true);showMenu();}
+    else{
+      state.confirm="m"+di; showMenu();
+      setTimeout(function(){if(state.confirm==="m"+di){state.confirm=null;var ae=document.activeElement;if(state.sheet==="menu"&&!(ae&&ae.tagName==="INPUT"))showMenu();}},3500);
+    }
+  }
+  else if(act==="saveName"){
+    var nv=(($("#askName")||{}).value||"").trim().slice(0,20);
+    if(!nv){toast("Nhập tên của bạn");return;}
+    userName=nv; lsSet(KEY.user,userName); closeSheet(); toast("Xin chào "+nv);
+  }
+  else if(act==="login"){doLogin();}
+  else if(act==="logout"){
+    closeSheet();
+    if(fbAuth) fbAuth.signOut().then(function(){entries=[];lsSet(KEY.cache,[]);},function(){});
+  }
+  else if(act==="uploadLocal"){
+    var old=lsGet(KEY.entries,[]), chain=Promise.resolve();
+    old.forEach(function(e){chain=chain.then(function(){return putEntry(e);});});
+    chain.then(function(){lsSet(KEY.entries,[]);toast("Đã đưa "+old.length+" mục lên dùng chung");closeSheet();renderData();},function(){toast("Chưa đưa lên được, thử lại nhé");});
+  }
+});
+function doLogin(){
+  var pw=($("#pw")||{}).value||"";
+  if(!pw){toast("Nhập mật khẩu của quán");return;}
+  if(!fbAuth||!fbCfg) return;
+  fbAuth.signInWithEmailAndPassword(fbCfg.email,pw).catch(function(err){
+    var c=err&&err.code||"";
+    showLogin(/network/.test(c)?"Không có mạng, thử lại khi có mạng.":"Sai mật khẩu, thử lại nhé.");
+  });
+}
+document.addEventListener("keydown",function(ev){
+  if(ev.key==="Enter"&&ev.target&&ev.target.id==="pw"){ev.preventDefault();doLogin();}
 });
 
 document.addEventListener("input",function(ev){
@@ -973,7 +1162,13 @@ document.addEventListener("input",function(ev){
   else if(t.id==="otherNote"){draft.otherNote=t.value;saveDraft();}
   else if(t.id==="start"){draft.start=t.value;saveDraft();updateSell();}
   else if(t.id==="end"){draft.end=t.value;saveDraft();updateSell();}
-  else if(t.id==="shopName"){shopName=t.value.trim()||DEFAULT_SHOP;lsSet(KEY.shop,shopName);applyShop();}
+  else if(t.id==="shopName"){
+    shopName=t.value.trim()||DEFAULT_SHOP;lsSet(KEY.shop,shopName);applyShop();
+    if(db){clearTimeout(shopTimer);var nm=shopName;shopTimer=setTimeout(function(){db.collection("settings").doc("main").set({shop:nm}).catch(function(){});},700);}
+  }
+  else if(t.id==="userName"){userName=t.value.trim().slice(0,20);lsSet(KEY.user,userName);}
+  else if(t.dataset&&t.dataset.mname!==undefined){var mi=MENU[+t.dataset.mname];if(mi){mi.name=t.value;saveMenu(false);}}
+  else if(t.dataset&&t.dataset.mprice!==undefined){var mj=MENU[+t.dataset.mprice];if(mj){mj.price=parseMoney(t.value);saveMenu(false);}}
   else if(t.dataset&&t.dataset.oother){var v=t.value;editOpen(t.dataset.oother,function(x){x.other=parseMoney(v);});}
   else if(t.dataset&&t.dataset.onote){var n=t.value;editOpen(t.dataset.onote,function(x){x.otherNote=n;});}
 });

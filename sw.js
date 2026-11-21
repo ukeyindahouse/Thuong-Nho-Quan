@@ -1,6 +1,6 @@
 /* ThuongNhoQuan: chạy được khi mất mạng.
    Mở lần đầu có mạng, các lần sau dùng bản đã lưu và tự cập nhật ngầm. */
-const CACHE = "tnq-v1";
+const CACHE = "tnq-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -29,7 +29,8 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
-  const fonts = url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com";
+  const fonts = url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com"
+    || (url.hostname === "www.gstatic.com" && url.pathname.startsWith("/firebasejs/"));
   if (!sameOrigin && !fonts) return;
 
   e.respondWith(
