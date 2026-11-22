@@ -14,10 +14,18 @@ Chạy trên điện thoại, có thể dùng chung số liệu giữa 2-3 máy 
 
 ## Cài về điện thoại
 
-- **Android (Chrome):** mở địa chỉ web, bấm **Cài ngay** ở đầu màn hình Bán hàng, hoặc menu ⋮ → *Cài đặt ứng dụng*.
+- **Android (Chrome):** mở địa chỉ web, bấm **Cài ngay** ở đầu màn hình Bàn, hoặc menu ⋮ → *Cài đặt ứng dụng*.
 - **iPhone (Safari):** bấm nút Chia sẻ → *Thêm vào MH chính*.
 
 Cài xong sẽ có biểu tượng quán ở màn hình chính, mở như ứng dụng và dùng được khi mất mạng.
+
+## Cách dùng hằng ngày (3 tab)
+
+- **Bàn:** khách vào chơi thì bấm nút to **Khách mới vào**, máy tự tính giờ. Khách gọi nước bấm **+ Gọi nước**. Khách về bấm **Khách về, tính tiền**, rồi **Gửi hình bill** (qua Zalo) hoặc **Lưu bill**. Bàn chơi quá 2 giờ đổi viền màu cam.
+- **Bán nhanh:** bán nước mang đi hoặc nhập tay (kể cả bida nhập giờ tay).
+- **Sổ sách:** *Bill* (xem, **Sửa bill**, **Mở lại bill** nếu lỡ tính sớm, xoá), *Chi tiền*, *Báo cáo*.
+- Xoá hoặc huỷ nhầm: bấm **Hoàn tác** ở thanh thông báo (còn 10 giây).
+- Chữ nhỏ khó đọc: **Cài đặt → Chữ to**.
 
 ## Dùng chung nhiều máy (2-3 người cùng một số liệu)
 
@@ -57,13 +65,13 @@ hoặc xoá món. Khi đã bật dùng chung nhiều máy, đổi ở một máy
 ## Tên người thao tác
 
 Lần đầu mở app, máy hỏi "Bạn tên gì?". Tên này được ghi ở bill (ai bấm bắt đầu, ai bấm kết thúc) và khoản chi.
-Xem ở tab **Hóa đơn**, bấm vào một hóa đơn. Mỗi điện thoại một tên, đổi lại ở **Cài đặt → Tên của bạn**.
+Xem ở **Sổ sách → Bill**, bấm vào một bill. Mỗi điện thoại một tên, đổi lại ở **Cài đặt → Tên của bạn**.
 
 ## Đổi cách tính bida
 
 Mở `index.html`, tìm đoạn `Bảng giá` ở đầu phần `<script>`, dòng `BIDA`: `hour` là giá một giờ,
 `up1`/`add1` là mốc lố nhẹ (15 phút, +5.000đ), `up2`/`add2` là mốc lố vừa (35 phút, +15.000đ).
-Lố hơn mốc `up2` thì tính thêm một giờ. Sau khi sửa, đổi `CACHE = "tnq-v3"` trong `sw.js` thành `tnq-v4`
+Lố hơn mốc `up2` thì tính thêm một giờ. Sau khi sửa, đổi `CACHE = "tnq-v4"` trong `sw.js` thành `tnq-v5`
 (tăng số lên một) để các máy đang dùng nhận bản mới ngay.
 
 ## Các file
