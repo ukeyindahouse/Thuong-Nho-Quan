@@ -693,6 +693,9 @@ function showSettings(){
   if(!isStandalone()&&!window.claude){
     h+='<section class="card"><h2>Ứng dụng</h2><button class="btn primary full" data-act="install">Cài về điện thoại</button></section>';
   }
+  h+='<section class="card"><h2>Trạng thái</h2><div class="pr" style="font-size:16px;color:var(--ink)">'
+    +(mode==="cloud"?'<b style="color:var(--rev)">Đang dùng chung</b> giữa các máy của quán. Bàn, bill, chi tiền đều giống nhau.':'<b style="color:var(--exp)">Chưa dùng chung.</b> Máy này đang lưu riêng, các máy khác không thấy. Xem hướng dẫn nối Firebase trong README.')
+    +'</div></section>';
   h+='<section class="card"><div class="switchrow"><div><h2 style="margin:0">Chữ to</h2><div class="pr">Chữ và nút lớn hơn, dễ nhìn hơn.</div></div>'
     +'<label class="switch"><input type="checkbox" id="bigText" aria-label="Chữ to"'+(big?' checked':'')+'><span class="track"></span></label></div></section>';
   h+='<section class="card"><h2>Tên quán (in trên bill)</h2><input class="field" id="shopName" autocomplete="off" value="'+esc(shopName)+'" aria-label="Tên quán"></section>';
@@ -704,6 +707,8 @@ function showSettings(){
     +(canShareFile()?'<button class="btn full" data-act="shareBackup">Gửi file dự phòng (Zalo, Drive…)</button>':'')
     +'<label class="btn full filebtn">Lấy lại từ file dự phòng<input type="file" id="restoreFile" accept=".json,application/json"></label></div>'
     +'<p class="hint">'+(last?'Lưu dự phòng gần nhất: '+fmtDT(last):'Chưa lưu dự phòng lần nào.')+'</p></section>';
+  h+='<section class="card"><h2>Bắt đầu lại từ đầu</h2><p class="hint" style="margin:0 0 10px">Xoá hết bill, bàn đang chơi và khoản chi'+(mode==="cloud"?' trên tất cả các máy dùng chung':' trên máy này')+'. Thực đơn và tên quán được giữ.</p>'
+    +'<button class="btn full danger" data-act="resetAll">Xoá hết số liệu…</button></section>';
   if(fb){
     var localCount=lsGet(KEY.entries,[]).length;
     h+='<section class="card"><h2>Dùng chung nhiều máy</h2><div class="stack">';
@@ -1153,7 +1158,7 @@ function setBig(on){
 
 
 /* ===== Bảng hiện lên (hóa đơn, cài đặt, hướng dẫn) ===== */
-function openSheet(kind,html){state.sheet=kind;$("#panel").innerHTML=html;$("#panel").setAttribute("aria-label",{receipt:"Bill",settings:"Cài đặt",menu:"Thực đơn và giá",name:"Tên của bạn",edit:"Sửa bill",rename:"Ghi tên khách",confirm:"Xác nhận"}[kind]||"Hướng dẫn");$("#sheet").hidden=false;}
+function openSheet(kind,html){state.sheet=kind;$("#panel").innerHTML=html;$("#panel").setAttribute("aria-label",{receipt:"Bill",settings:"Cài đặt",menu:"Thực đơn và giá",name:"Tên của bạn",edit:"Sửa bill",rename:"Ghi tên khách",confirm:"Xác nhận",reset:"Xoá hết số liệu"}[kind]||"Hướng dẫn");$("#sheet").hidden=false;}
 var confirmFn=null;
 function askConfirm(q,yes,fn,danger){
   confirmFn=fn; $("#toast").hidden=true; undoFnCur=null;
@@ -1449,6 +1454,23 @@ document.addEventListener("click",function(ev){
     closeSheet();
     editOpen(rid,function(x){x.label=rv;});
     renderTables();
+  }
+  else if(act==="resetAll"){
+    $("#toast").hidden=true; undoFnCur=null;
+    openSheet("reset",'<div class="askq">Xoá hết số liệu?</div><p class="hint" style="text-align:center;margin:0 0 14px">'
+      +(mode==="cloud"?'Tất cả bill, bàn đang chơi và khoản chi sẽ bị xoá trên mọi máy dùng chung.':'Tất cả bill, bàn đang chơi và khoản chi trên máy này sẽ bị xoá.')+' Không lấy lại được. Nên lưu dự phòng trước.</p>'
+      +'<div class="stack"><button class="btn lg" data-act="backup">Lưu dự phòng trước</button>'
+      +'<button class="btn lg" data-act="closeSheet">Không, giữ lại</button>'
+      +'<button class="btn lg danger" data-act="resetAll2">Tiếp tục xoá…</button></div>');
+  }
+  else if(act==="resetAll2"){
+    askConfirm("Chắc chắn xoá hết? Không lấy lại được.","Đúng, xoá hết",function(){
+      var list=entries.slice();
+      Promise.all(list.map(function(e){return delEntry(e.id);})).then(function(){
+        draft=emptyDraft(); saveDraft(); state.open=null;
+        go("tables"); toast("Đã xoá hết số liệu ("+list.length+" mục)");
+      },function(){toast("Chưa xoá hết được, thử lại nhé");});
+    },true);
   }
   else if(act==="confirmYes"){var cf=confirmFn; confirmFn=null; closeSheet(); if(cf) cf();}
   else if(act==="finish"){
