@@ -1,6 +1,6 @@
 /* ThuongNhoQuan: chạy được khi mất mạng.
    Mở lần đầu có mạng, các lần sau dùng bản đã lưu và tự cập nhật ngầm. */
-const CACHE = "tnq-v5";
+const CACHE = "tnq-2511-20446";
 const ASSETS = [
   "./",
   "./index.html",
@@ -13,7 +13,7 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (e) => {
@@ -36,7 +36,7 @@ self.addEventListener("fetch", (e) => {
   e.respondWith(
     caches.open(CACHE).then(async (cache) => {
       const cached = await cache.match(req, { ignoreSearch: true });
-      const network = fetch(req)
+      const network = fetch(req, sameOrigin ? { cache: "no-cache" } : undefined)
         .then((res) => {
           if (res && (res.ok || res.type === "opaque")) cache.put(req, res.clone());
           return res;
