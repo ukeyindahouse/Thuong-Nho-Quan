@@ -71,7 +71,7 @@ Xem ở **Sổ sách → Bill**, bấm vào một bill. Mỗi điện thoại m�
 
 Mở `index.html`, tìm đoạn `Bảng giá` ở đầu phần `<script>`, dòng `BIDA`: `hour` là giá một giờ,
 `up1`/`add1` là mốc lố nhẹ (15 phút, +5.000đ), `up2`/`add2` là mốc lố vừa (35 phút, +15.000đ).
-Lố hơn mốc `up2` thì tính thêm một giờ. Sau khi sửa, đổi `CACHE = "tnq-v4"` trong `sw.js` thành `tnq-v5`
+Lố hơn mốc `up2` thì tính thêm một giờ. Sau khi sửa, đổi `CACHE = "tnq-v5"` trong `sw.js` thành `tnq-v6`
 (tăng số lên một) để các máy đang dùng nhận bản mới ngay.
 
 ## Các file

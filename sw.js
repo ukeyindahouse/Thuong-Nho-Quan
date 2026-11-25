@@ -1,6 +1,6 @@
 /* ThuongNhoQuan: chạy được khi mất mạng.
    Mở lần đầu có mạng, các lần sau dùng bản đã lưu và tự cập nhật ngầm. */
-const CACHE = "tnq-v4";
+const CACHE = "tnq-v5";
 const ASSETS = [
   "./",
   "./index.html",
